@@ -2,62 +2,97 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BUFFER_SIZE 256
+#define MAX_LINE 256
+#define MAX_PIDS 100
 
-// Función para leer el contenido de un archivo
-void read_proc_file(const char *pid, const char *file, char *buffer) {
-    char path[BUFFER_SIZE];
-    FILE *fp;
+typedef struct {
+    char pid[10];
+    char name[MAX_LINE];
+    char state[MAX_LINE];
+    char vmSize[MAX_LINE];
+    char vmExe[MAX_LINE];
+    char vmData[MAX_LINE];
+    char vmStk[MAX_LINE];
+    char ctxtVol[MAX_LINE];
+    char ctxtNoVol[MAX_LINE];
+} Proceso;
 
-    snprintf(path, sizeof(path), "/proc/%s/%s", pid, file);
-    fp = fopen(path, "r");
-    if (fp == NULL) {
+void obtener_valor(const char *archivo, const char *clave, char *resultado) {
+    FILE *fp = fopen(archivo, "r");
+    if (!fp) {
         perror("Error al abrir el archivo");
-        exit(1);
+        strcpy(resultado, "No disponible");
+        return;
     }
 
-    fgets(buffer, BUFFER_SIZE, fp);
+    char linea[MAX_LINE];
+    while (fgets(linea, MAX_LINE, fp)) {
+        if (strncmp(linea, clave, strlen(clave)) == 0) {
+            sscanf(linea + strlen(clave), "%s", resultado);
+            break;
+        }
+    }
+
     fclose(fp);
 }
 
-// Función principal
+void recolectar_info(Proceso *p) {
+    char ruta[64];
+    snprintf(ruta, sizeof(ruta), "/proc/%s/status", p->pid);
+
+    obtener_valor(ruta, "Name:", p->name);
+    obtener_valor(ruta, "State:", p->state);
+    obtener_valor(ruta, "VmSize:", p->vmSize);
+    obtener_valor(ruta, "VmExe:", p->vmExe);
+    obtener_valor(ruta, "VmData:", p->vmData);
+    obtener_valor(ruta, "VmStk:", p->vmStk);
+    obtener_valor(ruta, "voluntary_ctxt_switches:", p->ctxtVol);
+    obtener_valor(ruta, "nonvoluntary_ctxt_switches:", p->ctxtNoVol);
+}
+
+void mostrar_info(const Proceso *p) {
+    printf("Pid: %s\n", p->pid);
+    printf("Nombre del proceso: %s\n", p->name);
+    printf("Estado: %s\n", p->state);
+    printf("Tamaño total de la imagen de memoria: %s KB\n", p->vmSize);
+    printf("Tamaño de la memoria TEXT: %s KB\n", p->vmExe);
+    printf("Tamaño de la memoria DATA: %s KB\n", p->vmData);
+    printf("Tamaño de la memoria STACK: %s KB\n", p->vmStk);
+    printf("Número de cambios de contexto (voluntarios - no voluntarios): %s - %s\n\n", p->ctxtVol, p->ctxtNoVol);
+}
+
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Uso: %s <PID>\n", argv[0]);
-        return 1;
+    if (argc < 2) {
+        fprintf(stderr, "Uso: %s [-l] <PID> [PID ...]\n", argv[0]);
+        return EXIT_FAILURE;
     }
 
-    char *pid = argv[1];
-    char buffer[BUFFER_SIZE];
-    char name[BUFFER_SIZE], state[BUFFER_SIZE];
-    int total_memory, vmexe, vmdata, vmstk, voluntary, nonvoluntary;
+    Proceso procesos[MAX_PIDS];
+    int numProcesos = 0;
 
-    // Obtener el nombre y el estado del proceso desde /proc/[pid]/status
-    read_proc_file(pid, "status", buffer);
-    sscanf(buffer, "Name:\t%s", name);
-    sscanf(buffer, "State:\t%s", state);
+    if (strcmp(argv[1], "-l") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Debe proporcionar al menos un PID después de -l.\n");
+            return EXIT_FAILURE;
+        }
 
-    // Obtener la memoria total, TEXT, DATA y STACK desde /proc/[pid]/smaps
-    read_proc_file(pid, "smaps", buffer);
-    sscanf(buffer, "VmSize:\t%d kB", &total_memory);
-    sscanf(buffer, "VmExe:\t%d kB", &vmexe);
-    sscanf(buffer, "VmData:\t%d kB", &vmdata);
-    sscanf(buffer, "VmStk:\t%d kB", &vmstk);
+        for (int i = 2; i < argc; i++) {
+            strncpy(procesos[numProcesos].pid, argv[i], sizeof(procesos[numProcesos].pid) - 1);
+            recolectar_info(&procesos[numProcesos]);
+            numProcesos++;
+        }
 
-    // Obtener el número de cambios de contexto voluntarios y no voluntarios
-    read_proc_file(pid, "stat", buffer);
-    sscanf(buffer, "%*d (%*s) %*c %*d %*d %*d %*d %*d %*d %*d %d %d",
-           &voluntary, &nonvoluntary);
+        printf("-- Información recolectada!!!\n");
+        for (int i = 0; i < numProcesos; i++) {
+            mostrar_info(&procesos[i]);
+        }
 
-    // Mostrar la información del proceso
-    printf("Nombre del proceso: %s\n", name);
-    printf("Estado: %s\n", state);
-    printf("Tamaño total de la imagen de memoria: %d KB\n", total_memory);
-    printf("Tamaño de la memoria TEXT: %d KB\n", vmexe);
-    printf("Tamaño de la memoria DATA: %d KB\n", vmdata);
-    printf("Tamaño de la memoria STACK: %d KB\n", vmstk);
-    printf("Número de cambios de contexto (voluntarios - no voluntarios): %d - %d\n",
-           voluntary, nonvoluntary);
+    } else {
+        Proceso p;
+        strncpy(p.pid, argv[1], sizeof(p.pid) - 1);
+        recolectar_info(&p);
+        mostrar_info(&p);
+    }
 
-    return 0;
+    return EXIT_SUCCESS;
 }
