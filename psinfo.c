@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #define MAX_LINE 256
 #define MAX_PIDS 100
@@ -15,12 +17,21 @@ typedef struct {
     char vmStk[MAX_LINE];
     char ctxtVol[MAX_LINE];
     char ctxtNoVol[MAX_LINE];
+    int valido;
 } Proceso;
+
+void mostrar_uso() {
+    fprintf(stderr, "Uso: psinfo [-l|-r] <listado PIDs>\n");
+}
+
+int archivo_existe(const char *ruta) {
+    struct stat buffer;
+    return (stat(ruta, &buffer) == 0);
+}
 
 void obtener_valor(const char *archivo, const char *clave, char *resultado) {
     FILE *fp = fopen(archivo, "r");
     if (!fp) {
-        perror("Error al abrir el archivo");
         strcpy(resultado, "No disponible");
         return;
     }
@@ -40,6 +51,13 @@ void recolectar_info(Proceso *p) {
     char ruta[64];
     snprintf(ruta, sizeof(ruta), "/proc/%s/status", p->pid);
 
+    if (!archivo_existe(ruta)) {
+        fprintf(stderr, "Error: el proceso con PID %s no existe.\n", p->pid);
+        p->valido = 0;
+        return;
+    }
+
+    p->valido = 1;
     obtener_valor(ruta, "Name:", p->name);
     obtener_valor(ruta, "State:", p->state);
     obtener_valor(ruta, "VmSize:", p->vmSize);
@@ -51,6 +69,8 @@ void recolectar_info(Proceso *p) {
 }
 
 void imprimir_info(FILE *salida, const Proceso *p) {
+    if (!p->valido) return;
+
     fprintf(salida, "Pid: %s\n", p->pid);
     fprintf(salida, "Nombre del proceso: %s\n", p->name);
     fprintf(salida, "Estado: %s\n", p->state);
@@ -63,33 +83,43 @@ void imprimir_info(FILE *salida, const Proceso *p) {
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Uso: %s [-l|-r] <PID> [PID ...]\n", argv[0]);
-        return EXIT_FAILURE;
+        fprintf(stderr, "Error: parámetros insuficientes.\n");
+        mostrar_uso();
+        return 1;
     }
 
     Proceso procesos[MAX_PIDS];
     int numProcesos = 0;
+    int modo_lista = 0;
+    int modo_reporte = 0;
 
-    if (strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "-r") == 0) {
+    if (strcmp(argv[1], "-l") == 0) {
+        modo_lista = 1;
+    } else if (strcmp(argv[1], "-r") == 0) {
+        modo_reporte = 1;
+    }
+
+    if (modo_lista || modo_reporte) {
         if (argc < 3) {
-            fprintf(stderr, "Debe proporcionar al menos un PID después de %s\n", argv[1]);
-            return EXIT_FAILURE;
+            fprintf(stderr, "Error: debe proporcionar al menos un PID después de %s\n", argv[1]);
+            mostrar_uso();
+            return 1;
         }
 
-        // Recolectar la información de todos los procesos
         for (int i = 2; i < argc; i++) {
             strncpy(procesos[numProcesos].pid, argv[i], sizeof(procesos[numProcesos].pid) - 1);
             recolectar_info(&procesos[numProcesos]);
             numProcesos++;
         }
 
-        if (strcmp(argv[1], "-l") == 0) {
+        if (modo_lista) {
             printf("-- Información recolectada!!!\n");
             for (int i = 0; i < numProcesos; i++) {
-                imprimir_info(stdout, &procesos[i]);
+                if (procesos[i].valido)
+                    imprimir_info(stdout, &procesos[i]);
             }
-        } else {
-            // Construir el nombre del archivo
+        } else if (modo_reporte) {
+            // Crear nombre del archivo
             char nombreArchivo[256] = "psinfo-report";
             for (int i = 2; i < argc; i++) {
                 strcat(nombreArchivo, "-");
@@ -100,11 +130,12 @@ int main(int argc, char *argv[]) {
             FILE *f = fopen(nombreArchivo, "w");
             if (!f) {
                 perror("Error al crear archivo");
-                return EXIT_FAILURE;
+                return 1;
             }
 
             for (int i = 0; i < numProcesos; i++) {
-                imprimir_info(f, &procesos[i]);
+                if (procesos[i].valido)
+                    imprimir_info(f, &procesos[i]);
             }
 
             fclose(f);
@@ -112,12 +143,22 @@ int main(int argc, char *argv[]) {
         }
 
     } else {
-        // Modo normal con un solo PID
+        // Un solo PID
+        if (argc != 2) {
+            fprintf(stderr, "Error: formato incorrecto.\n");
+            mostrar_uso();
+            return 1;
+        }
+
         Proceso p;
         strncpy(p.pid, argv[1], sizeof(p.pid) - 1);
         recolectar_info(&p);
+        if (!p.valido) {
+            mostrar_uso();
+            return 1;
+        }
         imprimir_info(stdout, &p);
     }
 
-    return EXIT_SUCCESS;
+    return 0;
 }
